@@ -1,0 +1,6 @@
+pandas
+requests
+numpy
+prophet
+scikit-learn
+xgboost
