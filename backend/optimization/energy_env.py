@@ -6,7 +6,7 @@ class EnergyEnv:
     """Custom RL environment for battery/grid optimization (Gym-style API)."""
 
     BATTERY_CAPACITY = 100
-    MAX_RATE = 10.0
+    MAX_RATE = 20
     EPISODE_LEN = 168
 
     ACTION_MAP = {0: MAX_RATE, 1: MAX_RATE / 2, 2: 0.0, 3: -MAX_RATE / 2, 4: -MAX_RATE}
@@ -82,12 +82,15 @@ class EnergyEnv:
         renewable_surplus = max(0.0, renewable - demand)
 
         shift_bonus = 0.0
-        if power < 0 and tariff >= 8.0:
-            shift_bonus += (-power / self.MAX_RATE) * 15.0
+        if power < 0:
+            if tariff >= 8.0:
+                shift_bonus += (-power / self.MAX_RATE) * 15.0
+            else:
+                shift_bonus -= (-power / self.MAX_RATE) * 10.0
         if power > 0:
             if renewable_surplus > 0:
                 # charging from actual renewable surplus -> strongest incentive
-                shift_bonus += min(power, renewable_surplus) / self.MAX_RATE * 30.0
+                shift_bonus += min(power, renewable_surplus) / self.MAX_RATE * 90.0
             elif tariff <= 4.0:
                 # fallback: charge from cheap grid power if no renewable surplus
                 shift_bonus += (power / self.MAX_RATE) * 10.0

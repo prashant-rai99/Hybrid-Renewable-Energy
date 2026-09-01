@@ -1,10 +1,10 @@
 import pandas as pd
 
 # System capacity assumptions (campus-scale)
-SOLAR_CAPACITY_KW = 100
+SOLAR_CAPACITY_KW = 200
 SOLAR_EFFICIENCY = 0.80
 
-WIND_CAPACITY_KW = 20
+WIND_CAPACITY_KW = 40
 CUT_IN_SPEED = 3
 RATED_SPEED = 12
 CUT_OUT_SPEED = 25

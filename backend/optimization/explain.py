@@ -30,7 +30,6 @@ def q_values_fn(states):
         return q_net(torch.FloatTensor(states)).numpy()
 
 
-# background dataset: sample of states from a test week, used as SHAP reference distribution
 env.start_idx, env.t = 0, 0
 env.soc = env.BATTERY_CAPACITY * 0.5
 background_states = []
