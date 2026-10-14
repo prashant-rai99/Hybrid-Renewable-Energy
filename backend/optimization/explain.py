@@ -85,3 +85,6 @@ importance_ranked = sorted(zip(FEATURE_NAMES, mean_abs_importance), key=lambda x
 print("Feature importance (mean |SHAP value|, averaged over 30 decisions):")
 for name, val in importance_ranked:
     print(f"  {name}: {val:.4f}")
+
+
+print("Base value:", explainer.expected_value)

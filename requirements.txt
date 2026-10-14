@@ -6,3 +6,9 @@ scikit-learn
 xgboost
 torch
 shap
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+requests
+fpdf2
