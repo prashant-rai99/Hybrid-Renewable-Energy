@@ -5,7 +5,7 @@ import pandas as pd
 class EnergyEnv:
     """Custom RL environment for battery/grid optimization (Gym-style API)."""
 
-    BATTERY_CAPACITY = 100
+    BATTERY_CAPACITY = 150
     MAX_RATE = 20
     EPISODE_LEN = 168
 
