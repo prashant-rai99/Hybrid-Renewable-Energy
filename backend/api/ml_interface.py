@@ -61,6 +61,11 @@ def _tariff(hour: int) -> float:
     return 4.0
 
 
+def _now_local() -> datetime:
+    # dataset hours are local time (IST, no DST), so live code must use IST too
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
+
+
 # ---------- load model once at import time (not per-request) ----------
 _df = pd.read_csv("data/campus_dataset_final.csv")
 _env = EnergyEnv(_df)
@@ -121,12 +126,12 @@ def _build_live_state(
 
 
 def predict_generation(hours_ahead: int = 24) -> list[dict]:
-    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    now = _now_local().replace(minute=0, second=0, microsecond=0)
 
     # Open-Meteo free forecast API, no key needed
     url = (
         f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
-        f"&hourly=cloudcover,windspeed_10m&forecast_days=2"
+        f"&hourly=cloudcover,windspeed_10m&forecast_days=2&timezone=Asia%2FKolkata"
     )
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
@@ -169,7 +174,7 @@ def predict_generation(hours_ahead: int = 24) -> list[dict]:
 
 
 def predict_demand(hours_ahead: int = 24) -> list[dict]:
-    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    now = _now_local().replace(minute=0, second=0, microsecond=0)
 
     db = SessionLocal()
     try:
@@ -231,7 +236,7 @@ def predict_demand(hours_ahead: int = 24) -> list[dict]:
 
 def get_recommendation() -> dict:
     global _current_soc
-    now = datetime.utcnow()
+    now = _now_local()
 
     gen = predict_generation(hours_ahead=1)[0]
     dem = predict_demand(hours_ahead=1)[0]
@@ -284,7 +289,7 @@ def get_recommendation() -> dict:
 
 
 def explain_recommendation() -> dict:
-    now = datetime.utcnow()
+    now = _now_local()
     gen = predict_generation(hours_ahead=1)[0]
     dem = predict_demand(hours_ahead=1)[0]
     state = _build_live_state(gen["_solar"], gen["_wind"], dem["value"], now)
