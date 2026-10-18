@@ -17,12 +17,9 @@ from .database import SessionLocal
 # ---------------------------------------------------------------------------
 # Emission factor
 # ---------------------------------------------------------------------------
-# Default value: 0.82 kg CO2 per kWh (approximate India grid average, CEA
-# baseline figures are commonly cited in this range). This is an
-# approximation for prototype/hackathon use only -- for the research paper,
-# replace this with a properly cited figure from the latest CEA CO2 Baseline
-# Database or equivalent authoritative source, and reference it there.
-DEFAULT_EMISSION_FACTOR_KG_PER_KWH = 0.82
+# CEA CO2 Baseline Database v20.0, weighted average emission factor, FY 2023-24
+# (Table S-1, adjusted for cross-border transfers, incl. RES and captive injection).
+DEFAULT_EMISSION_FACTOR_KG_PER_KWH = 0.727
 
 
 def calculate_co2_saved(

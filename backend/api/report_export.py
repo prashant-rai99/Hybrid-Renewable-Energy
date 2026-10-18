@@ -196,9 +196,9 @@ def export_pdf_summary(
         pdf.multi_cell(
             0,
             6,
-            "Note: CO2 savings are calculated using an approximate emission factor "
-            "(0.82 kg CO2/kWh, India grid average). For statutory submission, replace "
-            "this factor with a properly cited source (e.g. CEA CO2 Baseline Database).",
+            "Note: CO2 savings use the grid average emission factor "
+            "(0.727 kg CO2/kWh, CEA CO2 Baseline Database v20.0, FY 2023-24). "
+            "Update this factor when CEA publishes a newer version.",
         )
 
         pdf.output(output_path)
