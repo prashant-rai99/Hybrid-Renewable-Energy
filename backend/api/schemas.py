@@ -120,3 +120,29 @@ class HistoricalReportResponse(BaseModel):
     total_records: int
     summary: HistoricalSummary
     records: List[SensorDataResponse]
+
+
+# ---------- Live metrics and model performance (additive) ----------
+
+
+class LiveMetricsResponse(BaseModel):
+    timestamp: datetime
+    solar_kw: float
+    wind_kw: float
+    demand_kw: float
+    battery_soc_pct: float
+    grid_draw_kw: float
+
+
+class ModelPerformance(BaseModel):
+    name: Literal["solar", "wind", "demand"]
+    algorithm: str
+    mape_pct: float
+    rmse_kw: float
+    capacity_kw: float
+    test_hours: int
+
+
+class ModelPerformanceResponse(BaseModel):
+    models: List[ModelPerformance]
+    note: str

@@ -1,0 +1,29 @@
+{
+    "models": [
+        {
+            "name": "solar",
+            "algorithm": "Prophet",
+            "mape_pct": 16.93,
+            "rmse_kw": 4.8831,
+            "capacity_kw": 200,
+            "test_hours": 336
+        },
+        {
+            "name": "wind",
+            "algorithm": "Prophet",
+            "mape_pct": 87.19,
+            "rmse_kw": 0.4917,
+            "capacity_kw": 40,
+            "test_hours": 336
+        },
+        {
+            "name": "demand",
+            "algorithm": "XGBoost",
+            "mape_pct": 3.54,
+            "rmse_kw": 1.9703,
+            "capacity_kw": 80,
+            "test_hours": 336
+        }
+    ],
+    "note": "Evaluated on a 336-hour test window. Percentage error for wind is inflated by near-zero output hours."
+}

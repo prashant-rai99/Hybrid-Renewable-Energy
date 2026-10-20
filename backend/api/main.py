@@ -4,17 +4,24 @@ Sits between the ML/RL core (ml_interface.py -> Phase 2/3) and the
 frontend (Phase 6) / database (Phase 5).
 """
 
+import json
 import math
+import os
 import random
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import case, func
+from starlette.background import BackgroundTask
 
 from . import ml_interface
 from . import models
+from . import report_export
 from . import schemas
 from .carbon_analytics import DEFAULT_EMISSION_FACTOR_KG_PER_KWH
 from .database import get_db, init_db
@@ -25,17 +32,25 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS for Next.js frontend (adjust origins for production deployment)
+# Comma-separated list in ALLOWED_ORIGINS adds deployed frontend URLs.
+_origins = [
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+BATTERY_CAPACITY_KWH = 150.0
+_METRICS_PATH = Path(__file__).with_name("model_metrics.json")
 
 
 @app.on_event("startup")
@@ -79,6 +94,19 @@ def get_demand_forecast(hours: int = Query(24, ge=1, le=168)):
     )
 
 
+@app.get(
+    "/model-performance",
+    response_model=schemas.ModelPerformanceResponse,
+    tags=["forecast"],
+)
+def get_model_performance():
+    """Stored forecast accuracy metrics from the offline test-set evaluation."""
+    try:
+        return json.loads(_METRICS_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="model_metrics.json not found")
+
+
 # ---------------------------------------------------------------------------
 # Recommendation endpoints (backed by Phase 3 RL engine via ml_interface)
 # ---------------------------------------------------------------------------
@@ -102,6 +130,49 @@ def get_recommendation():
 def get_recommendation_explanation():
     """Human-readable explanation + top contributing factors for the current recommendation."""
     return ml_interface.explain_recommendation()
+
+
+# ---------------------------------------------------------------------------
+# Live metrics (replay of the seeded DQN-dispatched week, one row per hour)
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/metrics/live",
+    response_model=schemas.LiveMetricsResponse,
+    tags=["metrics"],
+)
+def get_live_metrics(db: Session = Depends(get_db)):
+    """Simulated live snapshot: replays the seeded window by current local hour."""
+    S = models.SensorReading
+    stamps = [t for (t,) in db.query(S.timestamp).distinct().order_by(S.timestamp)]
+    if not stamps:
+        raise HTTPException(
+            status_code=404, detail="No sensor data. Run seed_from_dataset.py first."
+        )
+
+    now = ml_interface._now_local().replace(tzinfo=None)
+    hour_index = int((now - datetime(2000, 1, 1)).total_seconds() // 3600)
+    ts = stamps[hour_index % len(stamps)]
+
+    latest = {}
+    for r in db.query(S).filter(S.timestamp == ts):
+        latest[r.source_type] = (r.value, (r.unit or "").lower())
+
+    def kw(kind):
+        return float(latest.get(kind, (0.0, ""))[0])
+
+    soc_value, soc_unit = latest.get("battery", (0.0, ""))
+    soc_pct = soc_value / BATTERY_CAPACITY_KWH * 100 if soc_unit == "kwh" else soc_value
+
+    return schemas.LiveMetricsResponse(
+        timestamp=now,
+        solar_kw=kw("solar"),
+        wind_kw=kw("wind"),
+        demand_kw=kw("demand"),
+        battery_soc_pct=round(float(soc_pct), 1),
+        grid_draw_kw=kw("grid"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +241,32 @@ def get_historical_report(
         total_records=total_records,
         summary=summary,
         records=records,
+    )
+
+
+@app.get("/report/pdf", tags=["reports"])
+def download_pdf_report(
+    start: date | None = Query(None, description="Start date, default earliest"),
+    end: date | None = Query(None, description="End date, default latest"),
+    db: Session = Depends(get_db),
+):
+    """PDF carbon summary built from the carbon_savings table."""
+    C = models.CarbonSaving
+    first, last = db.query(func.min(C.date), func.max(C.date)).one()
+    if first is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No carbon_savings rows. Run carbon analytics first.",
+        )
+
+    tmp = NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    report_export.export_pdf_summary(start or first, end or last, output_path=tmp.name)
+    return FileResponse(
+        tmp.name,
+        media_type="application/pdf",
+        filename="carbon_summary.pdf",
+        background=BackgroundTask(os.remove, tmp.name),
     )
 
 

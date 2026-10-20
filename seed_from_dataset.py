@@ -57,6 +57,7 @@ def main():
         env, start_idx, HOURS_TO_SEED, lambda s: HOLD_ACTION
     )
     dqn_grid, dqn_cost, socs = simulate(env, start_idx, HOURS_TO_SEED, dqn_policy)
+    capacity = env.BATTERY_CAPACITY
 
     old_formula_grid = (
         (window["demand_kw"] - window["solar_kw"] - window["wind_kw"])
@@ -65,7 +66,7 @@ def main():
     )
     base_total, dqn_total = sum(base_grid), sum(dqn_grid)
 
-    print(f"Battery capacity used: {env.BATTERY_CAPACITY} kWh")
+    print(f"Battery capacity used: {capacity} kWh")
     print(f"Old formula grid total: {old_formula_grid:.1f} kWh")
     print(f"Baseline (hold) grid:   {base_total:.1f} kWh, cost {base_cost:.1f}")
     print(f"DQN grid:               {dqn_total:.1f} kWh, cost {dqn_cost:.1f}")
@@ -91,7 +92,7 @@ def main():
             return
 
         rows = []
-        for (_, r), grid in zip(window.iterrows(), dqn_grid):
+        for (_, r), grid, soc in zip(window.iterrows(), dqn_grid, socs):
             ts = r["timestamp"].to_pydatetime()
             rows.extend(
                 [
@@ -116,13 +117,19 @@ def main():
                     SensorReading(
                         timestamp=ts, source_type="grid", value=float(grid), unit="kW"
                     ),
+                    SensorReading(
+                        timestamp=ts,
+                        source_type="battery",
+                        value=float(soc / capacity * 100),
+                        unit="%",
+                    ),
                 ]
             )
 
         db.add_all(rows)
         db.commit()
         print(
-            f"Seeded {len(rows)} sensor readings ({HOURS_TO_SEED} hours, DQN-dispatched grid)."
+            f"Seeded {len(rows)} sensor readings ({HOURS_TO_SEED} hours, DQN-dispatched grid, battery SoC)."
         )
     finally:
         db.close()
