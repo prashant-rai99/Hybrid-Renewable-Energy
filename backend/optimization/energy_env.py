@@ -12,9 +12,12 @@ class EnergyEnv:
     ACTION_MAP = {0: MAX_RATE, 1: MAX_RATE / 2, 2: 0.0, 3: -MAX_RATE / 2, 4: -MAX_RATE}
     CO2_PER_KWH_GRID = 0.82
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, start_range=None):
         self.df = df.reset_index(drop=True)
-        self.max_start = len(self.df) - self.EPISODE_LEN - 1
+        last_start = len(self.df) - self.EPISODE_LEN - 1
+        lo, hi = start_range if start_range else (0, last_start)
+        self.start_lo = lo
+        self.max_start = min(hi, last_start)
 
     def _tariff(self, hour):
         if hour in [6, 7, 8, 9, 18, 19, 20, 21]:
@@ -25,7 +28,7 @@ class EnergyEnv:
             return 4.0
 
     def reset(self):
-        self.start_idx = np.random.randint(0, self.max_start)
+        self.start_idx = np.random.randint(self.start_lo, self.max_start)
         self.t = 0
         self.soc = self.BATTERY_CAPACITY * 0.5
         return self._get_state()
