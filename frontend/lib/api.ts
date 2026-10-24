@@ -1,0 +1,23 @@
+export type LiveMetrics = { timestamp: string; solar_kw: number; wind_kw: number; demand_kw: number; battery_soc_pct: number; grid_draw_kw: number }
+export type ForecastPoint = { timestamp: string; value: number; confidence_low: number; confidence_high: number }
+export type Forecast = { source: string; unit: string; generated_at: string; horizon_hours: number; points: ForecastPoint[] }
+export type Recommendation = { timestamp: string; action: 'charge'|'discharge'|'hold'|'curtail'|'shift_load'|'export_grid'; target: 'battery'|'hvac'|'grid'|'lighting'|'workshop_load'; confidence: number; magnitude_kw: number|null }
+export type Explanation = { action: string; reason_text: string; top_factors: { factor: string; contribution: number }[] }
+export type Performance = { models: { name: 'solar'|'wind'|'demand'; algorithm: string; mape_pct: number; rmse_kw: number; capacity_kw: number; test_hours: number }[]; note: string }
+export type Historical = { page: number; page_size: number; total_records: number; summary: { grid_dependence_reduction_pct: number; co2_saved_kg: number; total_generation_kwh: number; total_demand_kwh: number; self_consumption_pct: number; is_estimated: boolean; total_grid_kwh: number; baseline_grid_kwh: number; grid_dependence_pct: number; optimization_co2_saved_kg: number }; records: { id: string; timestamp: string; source_type: 'solar'|'wind'|'battery'|'grid'|'demand'; value: number; unit: string }[] }
+
+const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+const mock = process.env.NEXT_PUBLIC_USE_MOCK !== 'false'
+const now = () => new Date().toISOString()
+const wait = (ms:number) => new Promise(r => setTimeout(r, ms))
+function points(hours:number, kind:'generation'|'demand') { return Array.from({length: hours}, (_,i) => { const h = i % 24; const solar = Math.max(0, Math.sin((h-6)/12*Math.PI))*155; const wind = 18 + Math.sin(i*0.7)*8; const value = kind === 'generation' ? solar + wind : 72 + Math.sin((h-7)/24*Math.PI*2)*12 + Math.max(0, Math.sin((h-8)/12*Math.PI))*18; return {timestamp:new Date(Date.now()+i*3600000).toISOString(), value:Math.round(value*10)/10, confidence_low:Math.round(value*.88*10)/10, confidence_high:Math.round(value*1.12*10)/10} }) }
+async function get<T>(path:string, fallback:T):Promise<T> { if (mock) { await wait(220); return fallback } try { const res = await fetch(`${base}${path}`, { next: { revalidate: 15 } }); if (!res.ok) throw new Error('Request failed'); return await res.json() } catch (e) { throw e } }
+export const api = {
+ live: () => get<LiveMetrics>('/metrics/live', {timestamp:now(),solar_kw:126.4,wind_kw:24.8,demand_kw:96.2,battery_soc_pct:68,grid_draw_kw:0}),
+ forecast: (hours=24) => Promise.all([get<Forecast>(`/generation/forecast?hours=${hours}`,{source:'generation',unit:'kW',generated_at:now(),horizon_hours:hours,points:points(hours,'generation')}),get<Forecast>(`/demand/forecast?hours=${hours}`,{source:'demand',unit:'kW',generated_at:now(),horizon_hours:hours,points:points(hours,'demand')})]),
+ performance: () => get<Performance>('/model-performance',{models:[{name:'solar',algorithm:'Prophet',mape_pct:16.93,rmse_kw:4.8831,capacity_kw:200,test_hours:336},{name:'wind',algorithm:'Prophet',mape_pct:87.19,rmse_kw:.4917,capacity_kw:40,test_hours:336},{name:'demand',algorithm:'XGBoost',mape_pct:3.54,rmse_kw:1.9703,capacity_kw:80,test_hours:336}],note:'Metrics evaluated on a held-out 336-hour test window.'}),
+ recommendation: () => get<Recommendation>('/recommendation',{timestamp:now(),action:'charge',target:'battery',confidence:.84,magnitude_kw:18.5}),
+ explanation: () => get<Explanation>('/recommendation/explanation',{action:'charge',reason_text:'Solar generation is peaking while demand is moderate. Storing surplus now reduces expected evening grid dependence.',top_factors:[{factor:'solar',contribution:.62},{factor:'hour_cos',contribution:.28},{factor:'soc',contribution:-.17},{factor:'demand',contribution:-.11}]}),
+ historical: (page=1, source='all') => get<Historical>(`/historical-report?page=${page}&page_size=25${source==='all'?'':`&source_type=${source}`}`,{page,page_size:25,total_records:96,summary:{grid_dependence_reduction_pct:22.2,co2_saved_kg:581.4,total_generation_kwh:28420,total_demand_kwh:31600,self_consumption_pct:78.6,is_estimated:true,total_grid_kwh:2801.3,baseline_grid_kwh:3600.6,grid_dependence_pct:8.9,optimization_co2_saved_kg:581.4},records:Array.from({length:24},(_,i)=>({id:`r-${page}-${i}`,timestamp:new Date(Date.now()-i*3600000).toISOString(),source_type:(['solar','wind','battery','grid','demand'] as const)[i%5],value:Math.round((20+Math.random()*120)*10)/10,unit:'kW'}))})
+}
+export { base, mock }
