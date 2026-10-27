@@ -5,7 +5,10 @@ Wires Phase 2 (forecasting) + Phase 3 (RL + SHAP) into the Phase 4 API contract.
 Does not modify predict.py / energy_env.py / dqn_agent.py / explain.py — only calls them.
 """
 
+import logging
 import math
+import time
+
 import requests
 import numpy as np
 import pandas as pd
@@ -23,6 +26,8 @@ from backend.optimization.dqn_agent import QNetwork
 
 from .database import SessionLocal
 from .models import SensorReading, RecommendationLog
+
+log = logging.getLogger("uvicorn.error")
 
 # ---------- constants (from locked Phase 1/3 config) ----------
 LAT, LON = 26.9124, 75.7873
@@ -122,27 +127,76 @@ def _build_live_state(
     )
 
 
-# ---------- 1. predict_generation ----------
+# ---------- weather: cached live fetch with dataset fallback ----------
+
+WEATHER_TTL_SECONDS = 1800
+WEATHER_TIMEOUT_SECONDS = 5
+_weather_cache = {"at": 0.0, "df": None}
 
 
-def predict_generation(hours_ahead: int = 24) -> list[dict]:
-    now = _now_local().replace(minute=0, second=0, microsecond=0)
+def _fetch_weather() -> pd.DataFrame:
+    cached = _weather_cache["df"]
+    if cached is not None and time.time() - _weather_cache["at"] < WEATHER_TTL_SECONDS:
+        return cached
 
-    # Open-Meteo free forecast API, no key needed
     url = (
         f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
         f"&hourly=cloudcover,windspeed_10m&forecast_days=2&timezone=Asia%2FKolkata"
     )
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
-    hourly = resp.json()["hourly"]
-    weather_df = pd.DataFrame(
+    try:
+        resp = requests.get(url, timeout=WEATHER_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+        hourly = resp.json()["hourly"]
+    except (requests.RequestException, KeyError, ValueError) as exc:
+        log.warning("Open-Meteo unavailable (%s)", type(exc).__name__)
+        if cached is not None:
+            return cached
+        raise
+
+    df = pd.DataFrame(
         {
             "ds": pd.to_datetime(hourly["time"]),
             "cloud_cover": hourly["cloudcover"],
             "wind_speed": hourly["windspeed_10m"],
         }
     )
+    _weather_cache["df"] = df
+    _weather_cache["at"] = time.time()
+    return df
+
+
+def _fallback_weather(now: datetime) -> pd.DataFrame:
+    # last full day of the dataset, matched by hour of day
+    last_day = _df.tail(24).set_index("hour_of_day")
+    rows = []
+    for i in range(48):
+        ds = now + timedelta(hours=i)
+        r = last_day.loc[ds.hour]
+        rows.append(
+            {"ds": ds, "cloud_cover": r["cloud_cover"], "wind_speed": r["wind_speed"]}
+        )
+    return pd.DataFrame(rows)
+
+
+def _get_weather(now: datetime) -> pd.DataFrame:
+    try:
+        df = _fetch_weather()
+        future = df[df["ds"] >= now]
+        if not future.empty:
+            return df
+    except (requests.RequestException, KeyError, ValueError):
+        pass
+    log.warning("Using dataset fallback weather")
+    return _fallback_weather(now)
+
+
+# ---------- 1. predict_generation ----------
+
+
+def predict_generation(hours_ahead: int = 24) -> list[dict]:
+    now = _now_local().replace(minute=0, second=0, microsecond=0)
+
+    weather_df = _get_weather(now)
     future_df = (
         weather_df[weather_df["ds"] >= now].head(hours_ahead).reset_index(drop=True)
     )
