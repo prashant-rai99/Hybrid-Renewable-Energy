@@ -19,8 +19,8 @@
         {
             "name": "demand",
             "algorithm": "XGBoost",
-            "mape_pct": 3.54,
-            "rmse_kw": 1.9703,
+            "mape_pct": 4.26,
+            "rmse_kw": 2.4805,
             "capacity_kw": 80,
             "test_hours": 336
         }
