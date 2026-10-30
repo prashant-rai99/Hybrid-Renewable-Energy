@@ -78,9 +78,43 @@ _q_net = QNetwork(state_dim=9, action_dim=5)
 _q_net.load_state_dict(torch.load("backend/optimization/dqn_model_best.pt"))
 _q_net.eval()
 
-# module-level SoC tracker: no real battery sensor exists, so we simulate it
-# starting at 50% and updating it as recommendations are issued.
-_current_soc = _env.BATTERY_CAPACITY * 0.5
+# No real battery sensor exists. The SoC comes from the seeded replay window,
+# the same snapshot that /metrics/live shows, so the dashboard and the
+# recommendation always read one value. Fallback is 50% when nothing is seeded.
+_DEFAULT_SOC_KWH = _env.BATTERY_CAPACITY * 0.5
+
+
+def _replay_soc_kwh() -> float:
+    db = SessionLocal()
+    try:
+        stamps = [
+            t
+            for (t,) in db.query(SensorReading.timestamp)
+            .distinct()
+            .order_by(SensorReading.timestamp)
+        ]
+        if not stamps:
+            return _DEFAULT_SOC_KWH
+        now = _now_local().replace(tzinfo=None)
+        hour_index = int((now - datetime(2000, 1, 1)).total_seconds() // 3600)
+        ts = stamps[hour_index % len(stamps)]
+        row = (
+            db.query(SensorReading)
+            .filter(
+                SensorReading.timestamp == ts, SensorReading.source_type == "battery"
+            )
+            .first()
+        )
+        if row is None:
+            return _DEFAULT_SOC_KWH
+        if (row.unit or "").lower() == "kwh":
+            soc = float(row.value)
+        else:
+            soc = float(row.value) / 100.0 * _env.BATTERY_CAPACITY
+        return min(_env.BATTERY_CAPACITY, max(0.0, soc))
+    finally:
+        db.close()
+
 
 # SHAP explainer built once (KernelExplainer is slow — do not rebuild per request)
 # campus_dataset_final.csv does not have soc/hour_sin/tariff etc. as columns —
@@ -107,13 +141,13 @@ def _q_values_fn(states: np.ndarray) -> np.ndarray:
 
 
 def _build_live_state(
-    solar_kw: float, wind_kw: float, demand_kw: float, ts: datetime
+    solar_kw: float, wind_kw: float, demand_kw: float, ts: datetime, soc_kwh: float
 ) -> np.ndarray:
     hour = ts.hour
     dow = ts.weekday()
     return np.array(
         [
-            _current_soc / _env.BATTERY_CAPACITY,
+            soc_kwh / _env.BATTERY_CAPACITY,
             solar_kw / 100.0,
             wind_kw / 20.0,
             demand_kw / 80.0,
@@ -288,48 +322,25 @@ def predict_demand(hours_ahead: int = 24) -> list[dict]:
 # ---------- 3. get_recommendation ----------
 
 
-def get_recommendation() -> dict:
-    global _current_soc
+def _decide() -> tuple:
+    """Pure decision step: no SoC update and no DB write."""
     now = _now_local()
-
     gen = predict_generation(hours_ahead=1)[0]
     dem = predict_demand(hours_ahead=1)[0]
-    state = _build_live_state(gen["_solar"], gen["_wind"], dem["value"], now)
+    state = _build_live_state(
+        gen["_solar"], gen["_wind"], dem["value"], now, _replay_soc_kwh()
+    )
     with torch.no_grad():
         q_vals = _q_net(torch.FloatTensor(state))
         action_idx = int(torch.argmax(q_vals).item())
         confidence = float(torch.softmax(q_vals, dim=0)[action_idx].item())
 
     action, magnitude = ACTION_MAP[action_idx]
-
-    # update simulated SoC based on the chosen action
-    if action == "charge":
-        _current_soc = min(_env.BATTERY_CAPACITY, _current_soc + magnitude)
-    elif action == "discharge":
-        _current_soc = max(0.0, _current_soc - magnitude)
-
     reason_text = (
         f"Recommended to {action} battery because current generation, demand and "
         f"tariff conditions favor this action to reduce cost and grid dependence."
     )
-
-    # log this recommendation to the shared DB so carbon_analytics.py has
-    # real recommendation history to aggregate, instead of dummy data.
-    db = SessionLocal()
-    try:
-        log_row = RecommendationLog(
-            timestamp=now,
-            action=action,
-            target="battery",
-            reason_text=reason_text,
-            confidence=round(confidence, 2),
-        )
-        db.add(log_row)
-        db.commit()
-    finally:
-        db.close()
-
-    return {
+    rec = {
         "timestamp": now,
         "action": action,
         "target": "battery",
@@ -337,19 +348,37 @@ def get_recommendation() -> dict:
         "magnitude_kw": magnitude if magnitude > 0 else None,
         "reason_text": reason_text,
     }
+    return rec, state, action_idx
+
+
+def get_recommendation() -> dict:
+    rec, _, _ = _decide()
+
+    # log this recommendation to the shared DB so carbon_analytics.py has
+    # real recommendation history to aggregate.
+    db = SessionLocal()
+    try:
+        db.add(
+            RecommendationLog(
+                timestamp=rec["timestamp"],
+                action=rec["action"],
+                target="battery",
+                reason_text=rec["reason_text"],
+                confidence=rec["confidence"],
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    return rec
 
 
 # ---------- 4. explain_recommendation ----------
 
 
 def explain_recommendation() -> dict:
-    now = _now_local()
-    gen = predict_generation(hours_ahead=1)[0]
-    dem = predict_demand(hours_ahead=1)[0]
-    state = _build_live_state(gen["_solar"], gen["_wind"], dem["value"], now)
-
-    rec = get_recommendation()
-    action_idx = [k for k, v in ACTION_MAP.items() if v[0] == rec["action"]][0]
+    rec, state, action_idx = _decide()
 
     explainer = shap.KernelExplainer(
         _q_values_fn, _background[FEATURE_NAMES].values[:30]
@@ -368,6 +397,6 @@ def explain_recommendation() -> dict:
 
     return {
         "action": rec["action"],
-        "reason_text": rec.get("reason_text", ""),
+        "reason_text": rec["reason_text"],
         "top_factors": top_factors,
     }
