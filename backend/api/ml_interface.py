@@ -32,7 +32,7 @@ log = logging.getLogger("uvicorn.error")
 # ---------- constants (from locked Phase 1/3 config) ----------
 LAT, LON = 26.9124, 75.7873
 MAX_RATE = 20.0
-DEMAND_MAPE = 0.0354  # validation MAPE, used to build an approximate confidence band
+DEMAND_MAPE = 0.0426  # validation MAPE, used to build an approximate confidence band
 
 # action index -> (action, magnitude_kw), agreed mapping
 ACTION_MAP = {
