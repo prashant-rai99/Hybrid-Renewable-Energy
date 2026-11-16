@@ -13,14 +13,18 @@ from backend.optimization.energy_env import EnergyEnv
 
 SEED = int(sys.argv[1]) if len(sys.argv) > 1 else 42
 EPISODES = int(sys.argv[2]) if len(sys.argv) > 2 else 1500
+ARB_W = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
+SCREEN = len(sys.argv) > 4 and sys.argv[4] == "screen"
 TARGET_UPDATE_EVERY = 10
 EVAL_EVERY = 50
-OUT_DIR = "backend/optimization/heldout"
+VAL_STRIDE = 24
+OUT_DIR = f"backend/optimization/heldout_arb{int(ARB_W)}"
 
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 os.makedirs(OUT_DIR, exist_ok=True)
+EnergyEnv.ARB_W = ARB_W
 
 df = pd.read_csv("data/campus_dataset_final.csv")
 month = pd.to_datetime(df["timestamp"]).dt.month
@@ -28,10 +32,12 @@ n = len(df)
 val_lo = int(df.index[month >= 9][0])
 test_lo = int(df.index[month >= 10][0])
 L = EnergyEnv.EPISODE_LEN
-val_starts = list(range(val_lo, test_lo - L + 1, L))
+val_starts = list(range(val_lo, test_lo - L + 1, VAL_STRIDE))
 test_starts = list(range(test_lo, n - L + 1, L))
 print(f"train [0,{val_lo}) val [{val_lo},{test_lo}) test [{test_lo},{n})")
-print(f"val windows: {len(val_starts)}, test windows: {len(test_starts)}")
+print(
+    f"val windows: {len(val_starts)}, test windows: {len(test_starts)}, ARB_W={ARB_W}"
+)
 
 train_env = EnergyEnv(df, start_range=(0, val_lo - L))
 eval_env = EnergyEnv(df)
@@ -77,6 +83,10 @@ def mean_over(starts, policy):
     return np.mean([run(s, policy) for s in starts], axis=0)
 
 
+def red(b, x):
+    return [100 * (b[0] - x[0]) / b[0], 100 * (b[2] - x[2]) / b[2]]
+
+
 best_val = float("inf")
 best_path = f"{OUT_DIR}/dqn_seed{SEED}_best.pt"
 t0 = time.time()
@@ -99,27 +109,40 @@ for ep in range(EPISODES):
         agent.update_target()
 
     if ep % EVAL_EVERY == 0:
-        val_grid = mean_over(val_starts, dqn_policy)[2]
-        if val_grid < best_val:
-            best_val = val_grid
+        v = mean_over(val_starts, dqn_policy)
+        if v[0] < best_val:
+            best_val = v[0]
             torch.save(agent.q_net.state_dict(), best_path)
         print(
             f"ep {ep}, reward={total_reward:.1f}, eps={agent.epsilon:.3f}, "
-            f"val_grid={val_grid:.1f}, best={best_val:.1f}, elapsed={time.time() - t0:.0f}s"
+            f"val_cost={v[0]:.1f}, val_grid={v[2]:.1f}, best_cost={best_val:.1f}, "
+            f"elapsed={time.time() - t0:.0f}s"
         )
 
 agent.q_net.load_state_dict(torch.load(best_path))
+
+if SCREEN:
+    vb = mean_over(val_starts, hold_policy)
+    vr = mean_over(val_starts, rule_policy)
+    vd = mean_over(val_starts, dqn_policy)
+    out = {
+        "arb_w": ARB_W,
+        "seed": SEED,
+        "val_rule_cost_grid_pct": red(vb, vr),
+        "val_dqn_cost_grid_pct": red(vb, vd),
+    }
+    with open(f"{OUT_DIR}/screen_seed{SEED}.json", "w") as f:
+        json.dump(out, f, indent=2)
+    print(json.dumps(out, indent=2))
+    sys.exit(0)
+
 base = mean_over(test_starts, hold_policy)
 rule = mean_over(test_starts, rule_policy)
 dqn = mean_over(test_starts, dqn_policy)
 
-
-def red(b, x):
-    return [100 * (b[0] - x[0]) / b[0], 100 * (b[2] - x[2]) / b[2]]
-
-
 result = {
     "seed": SEED,
+    "arb_w": ARB_W,
     "episodes": EPISODES,
     "seconds": round(time.time() - t0),
     "baseline": base.tolist(),

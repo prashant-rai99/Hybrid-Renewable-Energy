@@ -8,9 +8,11 @@ class EnergyEnv:
     BATTERY_CAPACITY = 150
     MAX_RATE = 20
     EPISODE_LEN = 168
+    SOC_MIN_FRAC = 0.2
+    ARB_W = 10.0
 
     ACTION_MAP = {0: MAX_RATE, 1: MAX_RATE / 2, 2: 0.0, 3: -MAX_RATE / 2, 4: -MAX_RATE}
-    CO2_PER_KWH_GRID = 0.82
+    CO2_PER_KWH_GRID = 0.727
 
     def __init__(self, df: pd.DataFrame, start_range=None):
         self.df = df.reset_index(drop=True)
@@ -62,11 +64,12 @@ class EnergyEnv:
         renewable = solar + wind
         tariff = self._tariff(hour)
 
+        soc_min = self.SOC_MIN_FRAC * self.BATTERY_CAPACITY
         power = self.ACTION_MAP[action]
         if power > 0:
             power = min(power, self.BATTERY_CAPACITY - self.soc)
         else:
-            power = -min(-power, self.soc)
+            power = -min(-power, max(0.0, self.soc - soc_min))
         self.soc += power
 
         # net_demand: +ve = deficit (need grid), -ve = surplus
@@ -92,21 +95,11 @@ class EnergyEnv:
                 shift_bonus -= (-power / self.MAX_RATE) * 10.0
         if power > 0:
             if renewable_surplus > 0:
-                # charging from actual renewable surplus -> strongest incentive
                 shift_bonus += min(power, renewable_surplus) / self.MAX_RATE * 90.0
             elif tariff <= 4.0:
-                # fallback: charge from cheap grid power if no renewable surplus
-                shift_bonus += (power / self.MAX_RATE) * 10.0
+                shift_bonus += (power / self.MAX_RATE) * self.ARB_W
 
-        low_soc_penalty = 20.0 if self.soc < 0.2 * self.BATTERY_CAPACITY else 0.0
-
-        reward = (
-            -cost
-            - 0.5 * emissions
-            - 0.15 * wear_penalty
-            + shift_bonus
-            - low_soc_penalty
-        ) / 10.0
+        reward = (-cost - 0.5 * emissions - 0.15 * wear_penalty + shift_bonus) / 10.0
 
         self.t += 1
         done = self.t >= self.EPISODE_LEN
